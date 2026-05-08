@@ -1,0 +1,16 @@
+﻿*.accdb
+data/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+status.json
+last_build_checks.log
+build_progress.json
+*.json.tmp
+.run_checks_web.lock
+run_progress.json
+*.log
+__pycache__/Check PF BP-PY-ZY 3804 с таблицей - настроенный access.accdb
+
