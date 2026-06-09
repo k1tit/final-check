@@ -208,8 +208,9 @@ def create_app():
             <option value="custom_group">Несколько выбранных SO — одной группой</option>
         </select>
 
-        <label for="folders">Номера папок SO через запятую</label>
-        <input type="text" name="folders" id="folders" placeholder="3801, 3803">
+        <label for="folders">Номера папок SO (необязательно)</label>
+        <input type="text" name="folders" id="folders" placeholder="3805, 3806 или пусто = все пары">
+        <p style="margin:0.25rem 0 0.75rem 0;font-size:0.88rem;color:#555;">В режиме «Три пары» список ограничивает задачи: в отчёт попадут только пары, где есть пересечение с указанными номерами (пустое поле — все три пары 3801+3803, 3802+3804, 3805+3806).</p>
 
         <label class="checkbox-label">
             <input type="checkbox" name="skip_manual" id="skipManual" value="1" checked>
