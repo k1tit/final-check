@@ -528,10 +528,13 @@ def _merge_sorg_results(
     folders: list[str],
     results: list[tuple[str, tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]]],
     exc_df: pd.DataFrame,
+    *,
+    failed_folders: list[str] | None = None,
 ) -> bool:
     errors_parts: list[pd.DataFrame] = []
     bill_parts: list[pd.DataFrame] = []
     order = {f: i for i, f in enumerate(folders)}
+    done = {f for f, _ in results}
     for folder, (errors, bill_to, base) in sorted(results, key=lambda x: order.get(x[0], 0)):
         if not base.empty:
             print(
@@ -548,13 +551,21 @@ def _merge_sorg_results(
         errors_all = _attach_comment_om(errors_all, exc_df)
     bill_all = pd.concat(bill_parts, ignore_index=True) if bill_parts else pd.DataFrame()
     save_pair_excel(pair_name, errors_all, bill_all, exc_df, folders)
-    return True
+
+    missing = failed_folders or [f for f in folders if f not in done]
+    if missing:
+        print(
+            f"[new_access] сохранено (частично): пара {pair_name} — без SO {', '.join(missing)}",
+            flush=True,
+        )
+    return not missing
 
 
 def process_pair(pair_name: str, folders: list[str], exc_df: pd.DataFrame) -> bool:
     """Последовательная обработка (для отладки и --no-parallel)."""
     exc_keys = exception_keys(exc_df)
     results: list[tuple[str, tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]]] = []
+    failed: list[str] = []
     iterator = folders
     if tqdm is not None:
         iterator = tqdm(folders, desc=pair_name, unit="SOrg", leave=True)
@@ -564,8 +575,16 @@ def process_pair(pair_name: str, folders: list[str], exc_df: pd.DataFrame) -> bo
             iterator.set_postfix_str(msg)
         else:
             print(f"[new_access] {pair_name}: {msg}", flush=True)
-        results.append((folder, process_sorg(folder, exc_keys)))
-    return _merge_sorg_results(pair_name, folders, results, exc_df)
+        try:
+            results.append((folder, process_sorg(folder, exc_keys)))
+        except Exception as exc:
+            failed.append(folder)
+            print(f"[new_access] SO {folder}: ОШИБКА — {exc}", flush=True)
+            traceback.print_exc()
+    if not results:
+        print(f"[new_access] пара {pair_name}: нет успешных SO — отчёт не сохранён", flush=True)
+        return False
+    return _merge_sorg_results(pair_name, folders, results, exc_df, failed_folders=failed)
 
 
 async def process_pair_async(pair_name: str, folders: list[str], exc_df: pd.DataFrame) -> bool:
@@ -580,18 +599,44 @@ async def process_pair_async(pair_name: str, folders: list[str], exc_df: pd.Data
         flush=True,
     )
 
-    async def _one(folder: str):
+    async def _one(folder: str) -> tuple[str, object]:
         print(f"[new_access] {pair_name}: SO {folder}: чтение и проверки…", flush=True)
-        res = await async_io(process_sorg, folder, exc_keys)
-        return folder, res
+        try:
+            res = await async_io(process_sorg, folder, exc_keys)
+            return folder, res
+        except Exception as exc:
+            print(f"[new_access] SO {folder}: ОШИБКА — {exc}", flush=True)
+            traceback.print_exc()
+            return folder, exc
 
-    results = await gather_limited([_one(f) for f in folders], limit=workers)
-    return _merge_sorg_results(pair_name, folders, list(results), exc_df)
+    raw = await gather_limited([_one(f) for f in folders], limit=workers)
+    results: list[tuple[str, tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]]] = []
+    failed: list[str] = []
+    for folder, item in raw:
+        if isinstance(item, Exception):
+            failed.append(folder)
+        else:
+            results.append((folder, item))
+    if not results:
+        print(f"[new_access] пара {pair_name}: нет успешных SO — отчёт не сохранён", flush=True)
+        return False
+    return _merge_sorg_results(pair_name, folders, results, exc_df, failed_folders=failed)
 
 
-async def _run_all_pairs(jobs: list[tuple[str, list[str]]], exc_df: pd.DataFrame) -> None:
+async def _run_all_pairs(jobs: list[tuple[str, list[str]]], exc_df: pd.DataFrame) -> int:
+    """Обрабатывает пары по очереди; каждая пара сохраняется сразу после своих SOrg."""
+    errors = 0
     for pair_name, folders in jobs:
-        await process_pair_async(pair_name, folders, exc_df)
+        print(f"[new_access] === пара {pair_name} ===", flush=True)
+        try:
+            ok = await process_pair_async(pair_name, folders, exc_df)
+            if not ok:
+                errors += 1
+        except Exception as exc:
+            errors += 1
+            print(f"[new_access] пара {pair_name}: критическая ошибка — {exc}", flush=True)
+            traceback.print_exc()
+    return errors
 
 
 def main() -> int:
@@ -612,9 +657,18 @@ def main() -> int:
         os.environ["REPORTS_WORKERS"] = str(args.workers)
 
     paths = load_runtime_paths_dict()
+    script_root = Path(__file__).resolve().parent
+    local_data = (script_root / "data").resolve()
+    data_dir = paths["data_dir"].resolve()
     print(f"[new_access] data_dir:  {paths['data_dir']}", flush=True)
     print(f"[new_access] base_dir:  {paths['base_dir']}", flush=True)
     print(f"[new_access] result:    {paths['output_dir']}", flush=True)
+    if data_dir != local_data and script_root not in data_dir.parents:
+        print(
+            f"[new_access] ВНИМАНИЕ: data_dir не рядом со скриптом ({script_root}).\n"
+            f"  Проверьте runtime_paths.json — возможно читаете/пишете не ту папку data.",
+            flush=True,
+        )
 
     if not BASE_DIR.exists():
         print(f"[new_access] Нет каталога: {BASE_DIR}", flush=True)
@@ -628,16 +682,20 @@ def main() -> int:
     w = worker_count(2, default_cap=2)
     print(f"[new_access] пары: {', '.join(j[0] for j in jobs)} | parallel={par} workers≈{w}", flush=True)
 
+    exit_code = 0
     try:
-        asyncio.run(_run_all_pairs(jobs, exc_df))
+        pair_errors = asyncio.run(_run_all_pairs(jobs, exc_df))
+        if pair_errors:
+            exit_code = 1
+            print(f"[new_access] готово с ошибками в {pair_errors} парах", flush=True)
+        else:
+            print("[new_access] готово", flush=True)
     except Exception:
         traceback.print_exc()
-        return 1
+        exit_code = 1
     finally:
         shutdown_executor()
-
-    print("[new_access] готово", flush=True)
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
