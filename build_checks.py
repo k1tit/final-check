@@ -308,7 +308,11 @@ def _get_file(folder: Path, pattern: str) -> Path | None:
     """Самый новый файл по дате изменения (если в папке несколько совпадений)."""
     if not folder.exists():
         return None
-    files = list(folder.glob(pattern))
+    files = [
+        p for p in folder.glob(pattern)
+        if not p.name.startswith("~$")  # lock-файл Excel при открытой книге — не xlsx
+        and not p.name.startswith(".")
+    ]
     if not files:
         return None
     if len(files) > 1:
