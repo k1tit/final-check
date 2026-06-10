@@ -305,17 +305,48 @@ def _partner_lookup_extra_columns(base_lookup: pd.DataFrame, prefix: str) -> dic
 
 
 def _get_file(folder: Path, pattern: str) -> Path | None:
+    """Самый новый файл по дате изменения (если в папке несколько совпадений)."""
     if not folder.exists():
         return None
     files = list(folder.glob(pattern))
-    return files[0] if files else None
+    if not files:
+        return None
+    if len(files) > 1:
+        files = sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+        print(
+            f"[build_checks] В {folder} найдено {len(files)} файлов «{pattern}», "
+            f"берём новый: {files[0].name}",
+            flush=True,
+        )
+    return files[0]
+
+
+def _read_excel_checked(path: Path, *, kind: str, folder: str) -> pd.DataFrame:
+    """read_excel с понятной ошибкой: какой файл и SO не читается."""
+    try:
+        return pd.read_excel(path, dtype=str)
+    except Exception as exc:
+        name = type(exc).__name__
+        if name == "BadZipFile" or "zip" in str(exc).lower():
+            hint = (
+                "Файл повреждён или это не настоящий .xlsx "
+                "(часто: не докачался, открыт в Excel при копировании, переименованный .xls/.csv)."
+            )
+        else:
+            hint = str(exc)
+        raise RuntimeError(
+            f"Не удалось прочитать {kind} для SO {folder}:\n"
+            f"  {path.resolve()}\n"
+            f"  {hint}\n"
+            f"  Перевыгрузите файл макросом или удалите лишние/старые *{kind.split()[0]}* в папке."
+        ) from exc
 
 
 _CYR = re.compile(r"[А-Яа-яЁё]")
 
 
 def _read_base(path: Path, folder: str) -> pd.DataFrame:
-    df = pd.read_excel(path, dtype=str)
+    df = _read_excel_checked(path, kind="Base", folder=folder)
     df = df.rename(columns={"OrBlk.1": "OrBlk1"})
     so = _so_col(df)
     if so and so != "SO":
@@ -367,8 +398,8 @@ def dedupe_base(df: pd.DataFrame) -> pd.DataFrame:
     return result[df.columns].reset_index(drop=True)
 
 
-def _read_partner(path: Path, folder: str) -> pd.DataFrame:
-    df = pd.read_excel(path, dtype=str)
+def _read_partner(path: Path, folder: str, *, kind: str = "partner") -> pd.DataFrame:
+    df = _read_excel_checked(path, kind=kind, folder=folder)
     kunnr = _col(df, "KUNNR", "Customer", "Sold-to")
     ktonr = _col(df, "KTONR", "BP", "PY", "ZY")
     if not kunnr or not ktonr:

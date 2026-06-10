@@ -246,13 +246,18 @@ def load_sorg(folder: str) -> tuple[pd.DataFrame, pd.DataFrame | None, pd.DataFr
     if not f_base:
         return pd.DataFrame(), None, None, None
 
+    print(f"[new_access] SO {folder}: Base → {f_base.name}", flush=True)
     base = dedupe_base_access(_read_base(f_base, folder))
 
-    def _partner(pat: str) -> pd.DataFrame | None:
+    def _partner(pat: str, label: str) -> pd.DataFrame | None:
         f = _get_file(fp, pat)
-        return _read_partner(f, folder) if f else None
+        if not f:
+            print(f"[new_access] SO {folder}: {label} не найден ({pat})", flush=True)
+            return None
+        print(f"[new_access] SO {folder}: {label} → {f.name}", flush=True)
+        return _read_partner(f, folder, kind=label)
 
-    return base, _partner("*BP*.xlsx"), _partner("*PY*.xlsx"), _partner("*ZY*.xlsx")
+    return base, _partner("*BP*.xlsx", "BP"), _partner("*PY*.xlsx", "PY"), _partner("*ZY*.xlsx", "ZY")
 
 
 def add_checks_access(df: pd.DataFrame) -> pd.DataFrame:
