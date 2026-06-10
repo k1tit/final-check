@@ -330,24 +330,85 @@ def _file_snapshot(path: Path) -> tuple[int, float]:
     return st.st_size, st.st_mtime
 
 
+def _peek_file_format(path: Path) -> str:
+    """Сигнатура файла на диске (расширение .xlsx может врать)."""
+    with open(path, "rb") as f:
+        head = f.read(16)
+    if head.startswith(b"PK"):
+        return "xlsx_zip"
+    if head.startswith(b"\xd0\xcf\x11\xe0"):
+        return "xls_ole"
+    stripped = head.lstrip()
+    if stripped.startswith(b"<") or stripped.startswith(b"<?xml"):
+        return "html_or_xml"
+    return "unknown"
+
+
+def _read_excel_robust(path: Path) -> pd.DataFrame:
+    """
+    Несколько движков read_excel.
+    Excel часто открывает .xls под именем .xlsx — openpyxl падает с BadZipFile.
+    """
+    fmt = _peek_file_format(path)
+    if fmt == "xlsx_zip":
+        engines = ("openpyxl", "calamine")
+    elif fmt == "xls_ole":
+        engines = ("xlrd", "calamine")
+    else:
+        engines = ("openpyxl", "calamine", "xlrd")
+
+    errors: list[str] = []
+    for engine in engines:
+        try:
+            return pd.read_excel(path, dtype=str, engine=engine)
+        except ImportError:
+            errors.append(f"{engine}: не установлен (pip install {engine})")
+        except Exception as exc:
+            errors.append(f"{engine}: {type(exc).__name__}: {exc}")
+
+    fmt_hint = {
+        "xls_ole": (
+            "На диске это старый Excel (.xls), хотя имя .xlsx. "
+            "Excel открывает, openpyxl — нет. "
+            "«Сохранить как» → xlsx или pip install xlrd"
+        ),
+        "html_or_xml": "Это HTML/XML, не Excel — перевыгрузите макросом.",
+        "unknown": "Неизвестный формат файла.",
+        "xlsx_zip": "ZIP/xlsx повреждён или нестандартный.",
+    }.get(fmt, "")
+    detail = "\n".join(f"  - {e}" for e in errors)
+    if fmt_hint:
+        detail += f"\n  {fmt_hint}"
+    raise RuntimeError(f"Не удалось прочитать {path.name} ({fmt}):\n{detail}")
+
+
 def _read_excel_checked(path: Path, *, kind: str, folder: str) -> pd.DataFrame:
     """read_excel с понятной ошибкой: какой файл и SO не читается."""
     snap_before = _file_snapshot(path)
+    fmt = _peek_file_format(path)
     try:
-        df = pd.read_excel(path, dtype=str)
+        df = _read_excel_robust(path)
     except Exception as exc:
-        name = type(exc).__name__
-        if name == "BadZipFile" or "zip" in str(exc).lower():
+        if fmt == "xls_ole":
             hint = (
-                "Файл УЖЕ был нечитаемым в момент открытия (скрипт только читает, не записывает в выгрузки). "
-                f"Размер на диске: {snap_before[0]} байт. "
-                "Частые причины: битая копия, не тот каталог data, Excel/макрос/OneDrive перезаписали файл."
+                "Файл открывается в Excel, но на диске это .xls (не .xlsx). "
+                f"Размер: {snap_before[0]} байт. "
+                "Сохраните в Excel как «Книга Excel (*.xlsx)» или: pip install xlrd"
+            )
+        elif fmt == "html_or_xml":
+            hint = "Файл похож на HTML/XML, не на Excel — перевыгрузите макросом."
+        elif "BadZipFile" in type(exc).__name__ or "zip" in str(exc).lower():
+            hint = (
+                f"BadZipFile (формат {fmt}). Excel иногда открывает после «ремонта». "
+                f"Размер: {snap_before[0]} байт. "
+                "Сохраните копию через Excel «Сохранить как» xlsx."
             )
         else:
             hint = str(exc)
         raise RuntimeError(
             f"Не удалось прочитать {kind} для SO {folder}:\n"
             f"  {path.resolve()}\n"
+            f"  формат на диске: {fmt}\n"
             f"  {hint}\n"
             f"  Перевыгрузите файл макросом или удалите лишние/старые *{kind.split()[0]}* в папке."
         ) from exc

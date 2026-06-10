@@ -11,7 +11,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from build_checks import BASE_DIR, load_runtime_paths_dict  # noqa: E402
+from build_checks import BASE_DIR, _peek_file_format, load_runtime_paths_dict  # noqa: E402
 
 PATTERNS = [
     ("Base", "*Base*.xlsx"),
@@ -30,14 +30,21 @@ def _is_zip_xlsx(path: Path) -> tuple[bool, str]:
         return False, f"слишком маленький ({path.stat().st_size} байт)"
     if path.name.startswith("~$"):
         return False, "lock-файл Excel (~$) — закройте книгу в Excel"
+    fmt = _peek_file_format(path)
+    if fmt == "xls_ole":
+        return False, "на диске .xls (Excel откроет, openpyxl — нет) → Сохранить как xlsx или pip install xlrd"
+    if fmt == "html_or_xml":
+        return False, "HTML/XML, не Excel"
+    if fmt != "xlsx_zip":
+        return False, f"неизвестный формат ({fmt})"
     try:
         with zipfile.ZipFile(path) as zf:
             names = zf.namelist()
             if not any(n.startswith("xl/") for n in names):
                 return False, "не похож на xlsx (нет xl/ внутри)"
-        return True, "OK"
+        return True, "OK (xlsx)"
     except zipfile.BadZipFile:
-        return False, "BadZipFile — не настоящий/битый xlsx"
+        return False, "BadZipFile — Excel может открыть после «ремонта», pandas — нет; Сохранить как xlsx"
     except Exception as exc:
         return False, str(exc)
 
