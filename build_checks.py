@@ -325,16 +325,23 @@ def _get_file(folder: Path, pattern: str) -> Path | None:
     return files[0]
 
 
+def _file_snapshot(path: Path) -> tuple[int, float]:
+    st = path.stat()
+    return st.st_size, st.st_mtime
+
+
 def _read_excel_checked(path: Path, *, kind: str, folder: str) -> pd.DataFrame:
     """read_excel с понятной ошибкой: какой файл и SO не читается."""
+    snap_before = _file_snapshot(path)
     try:
-        return pd.read_excel(path, dtype=str)
+        df = pd.read_excel(path, dtype=str)
     except Exception as exc:
         name = type(exc).__name__
         if name == "BadZipFile" or "zip" in str(exc).lower():
             hint = (
-                "Файл повреждён или это не настоящий .xlsx "
-                "(часто: не докачался, открыт в Excel при копировании, переименованный .xls/.csv)."
+                "Файл УЖЕ был нечитаемым в момент открытия (скрипт только читает, не записывает в выгрузки). "
+                f"Размер на диске: {snap_before[0]} байт. "
+                "Частые причины: битая копия, не тот каталог data, Excel/макрос/OneDrive перезаписали файл."
             )
         else:
             hint = str(exc)
@@ -344,6 +351,16 @@ def _read_excel_checked(path: Path, *, kind: str, folder: str) -> pd.DataFrame:
             f"  {hint}\n"
             f"  Перевыгрузите файл макросом или удалите лишние/старые *{kind.split()[0]}* в папке."
         ) from exc
+    snap_after = _file_snapshot(path)
+    if snap_after != snap_before:
+        raise RuntimeError(
+            f"Файл изменился на диске во время чтения {kind} SO {folder}:\n"
+            f"  {path.resolve()}\n"
+            f"  до чтения: размер={snap_before[0]} mtime={snap_before[1]}\n"
+            f"  после чтения: размер={snap_after[0]} mtime={snap_after[1]}\n"
+            f"  Это не запись из pandas — ищите Excel, макрос выгрузки или синхронизацию (OneDrive)."
+        )
+    return df
 
 
 _CYR = re.compile(r"[А-Яа-яЁё]")

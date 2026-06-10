@@ -45,6 +45,7 @@ from build_checks import (
     _unique_excel_sheet_name,
     collect_and_persist_global_exception,
     exception_keys,
+    load_runtime_paths_dict,
     _norm_cust,
 )
 
@@ -537,6 +538,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="PF BP-PY-ZY — логика Access, отчёт парами")
     parser.add_argument("--mode", choices=["pairs"], default="pairs")
     args = parser.parse_args()
+
+    paths = load_runtime_paths_dict()
+    print(f"[new_access] data_dir:  {paths['data_dir']}", flush=True)
+    print(f"[new_access] base_dir:  {paths['base_dir']}", flush=True)
+    print(f"[new_access] result:    {paths['output_dir']}", flush=True)
 
     if not BASE_DIR.exists():
         print(f"[new_access] Нет каталога: {BASE_DIR}", flush=True)
