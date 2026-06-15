@@ -1095,9 +1095,9 @@ def add_bill_to_sheets(
             grp_raw = _bill_to_rows_for_sorg(bill_to_df, so_key) if not bill_to_df.empty else pd.DataFrame()
             grp = _prep_bill_to_sheet(grp_raw) if not grp_raw.empty else pd.DataFrame(columns=BILL_TO_COLS)
             if grp.empty:
-                pd.DataFrame(columns=BILL_TO_COLS).to_excel(writer, sheet_name=title, index=False)
+                _write_bill_to_sheet(writer, title, pd.DataFrame(columns=BILL_TO_COLS))
             else:
-                grp.to_excel(writer, sheet_name=title, index=False)
+                _write_bill_to_sheet(writer, title, grp)
         return
 
     if not bill_to_df.empty:
@@ -1110,16 +1110,20 @@ def add_bill_to_sheets(
                 grp_f = _bill_to_rows_for_sorg(grp_raw, so_key)
                 grp = _prep_bill_to_sheet(grp_f) if not grp_f.empty else pd.DataFrame(columns=BILL_TO_COLS)
                 if grp.empty:
-                    pd.DataFrame(columns=BILL_TO_COLS).to_excel(writer, sheet_name=title, index=False)
+                    _write_bill_to_sheet(writer, title, pd.DataFrame(columns=BILL_TO_COLS))
                 else:
-                    grp.to_excel(writer, sheet_name=title, index=False)
+                    _write_bill_to_sheet(writer, title, grp)
         else:
-            _prep_bill_to_sheet(bt2).to_excel(
-                writer, sheet_name=_excel_sheet_name_safe("Привязка Bill-to по ИНН"), index=False
+            _write_bill_to_sheet(
+                writer,
+                _excel_sheet_name_safe("Привязка Bill-to по ИНН"),
+                _prep_bill_to_sheet(bt2),
             )
     else:
-        pd.DataFrame(columns=BILL_TO_COLS).to_excel(
-            writer, sheet_name=_excel_sheet_name_safe("Привязка Bill-to по ИНН"), index=False
+        _write_bill_to_sheet(
+            writer,
+            _excel_sheet_name_safe("Привязка Bill-to по ИНН"),
+            pd.DataFrame(columns=BILL_TO_COLS),
         )
 
 
@@ -1227,6 +1231,150 @@ def _prep_mismatch_sheet(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=MISMATCH_EXPORT_COLS)
 
 
+# Заливка листов Excel (тема Excel).
+_FILL_OLIVE_60 = "C4D79B"       # Olive Green, Lighter 60%
+_FILL_BLUE_80 = "DCE6F1"        # Blue, Lighter 80%
+_FILL_ORANGE_80 = "FDE9D9"      # Orange, Lighter 80%
+_FILL_PURPLE_80 = "E4DFEC"      # Purple, Lighter 80%
+_FILL_AQUA_80 = "DAEEF3"        # Aqua, Lighter 80%
+_FILL_YELLOW = "FFFF00"
+_FILL_WHITE_DARK_15 = "D9D9D9"  # White, Dark 15%
+
+# Лист «… Несоответствия» — заливка всей колонки.
+_MISMATCH_COLUMN_FILL_HEX: dict[str, str] = {
+    "Customer": _FILL_OLIVE_60,
+    "OrBlk1": _FILL_OLIVE_60,
+    "OrBlk2": _FILL_OLIVE_60,
+    "Cust OrBlk Bill-to": _FILL_OLIVE_60,
+    "Check BP-PY-ZY": _FILL_OLIVE_60,
+    "Check Tax Number Cust&BP": _FILL_OLIVE_60,
+    "Check Cust&BP": _FILL_OLIVE_60,
+    "BP": _FILL_BLUE_80,
+    "BP OrBlk1": _FILL_BLUE_80,
+    "BP OrBlk2": _FILL_BLUE_80,
+    "BP OrBlk Bill-to": _FILL_BLUE_80,
+    "PY": _FILL_ORANGE_80,
+    "PY OrBlk1": _FILL_ORANGE_80,
+    "PY OrBlk2": _FILL_ORANGE_80,
+    "ZY": _FILL_PURPLE_80,
+    "ZY OrBlk1": _FILL_PURPLE_80,
+    "ZY OrBlk2": _FILL_PURPLE_80,
+    "Comment MD Analyst": _FILL_YELLOW,
+}
+
+# Лист «… Привязка Bill-to по ИНН» — заливка всей колонки.
+_BILL_TO_COLUMN_FILL_HEX: dict[str, str] = {
+    "Customer": _FILL_OLIVE_60,
+    "OrBlk1": _FILL_OLIVE_60,
+    "OrBlk2": _FILL_OLIVE_60,
+    "Cust OrBlk Bill-to": _FILL_OLIVE_60,
+    "BP now": _FILL_OLIVE_60,
+    "Check Cust&BP": _FILL_OLIVE_60,
+    "BP Customer": _FILL_AQUA_80,
+    "BP OrBlk1": _FILL_AQUA_80,
+    "BP OrBlk2": _FILL_AQUA_80,
+    "BP status": _FILL_YELLOW,
+}
+
+
+def _excel_cell_display_width(value: object) -> float:
+    if value is None:
+        return 0.0
+    s = str(value)
+    return sum(1.6 if ord(ch) > 127 else 1.0 for ch in s)
+
+
+def _autofit_worksheet_columns(ws, *, min_width: float = 6.0, max_width: float = 72.0) -> None:
+    from openpyxl.utils import get_column_letter
+
+    for col_idx in range(1, (ws.max_column or 0) + 1):
+        letter = get_column_letter(col_idx)
+        max_len = 0.0
+        for row in range(1, (ws.max_row or 0) + 1):
+            max_len = max(max_len, _excel_cell_display_width(ws.cell(row=row, column=col_idx).value))
+        ws.column_dimensions[letter].width = min(max(max_len + 1.5, min_width), max_width)
+
+
+def _format_worksheet_columns(
+    ws,
+    full_column_hex: dict[str, str],
+    *,
+    header_only_rest_hex: str | None = _FILL_WHITE_DARK_15,
+) -> None:
+    """Указанные колонки — заливка целиком; остальные — только шапка (если задан цвет)."""
+    from openpyxl.styles import PatternFill
+
+    if not ws.max_column or not ws.max_row:
+        return
+    if ws.max_column == 1 and str(ws.cell(1, 1).value or "").strip() == "Сообщение":
+        _autofit_worksheet_columns(ws)
+        return
+
+    full_fills = {
+        name: PatternFill(fill_type="solid", fgColor=hex_color)
+        for name, hex_color in full_column_hex.items()
+    }
+    header_rest = (
+        PatternFill(fill_type="solid", fgColor=header_only_rest_hex)
+        if header_only_rest_hex
+        else None
+    )
+
+    for col_idx in range(1, ws.max_column + 1):
+        header = str(ws.cell(1, col_idx).value or "").strip()
+        if not header:
+            continue
+        full_fill = full_fills.get(header)
+        if full_fill is not None:
+            for row_idx in range(1, ws.max_row + 1):
+                ws.cell(row=row_idx, column=col_idx).fill = full_fill
+        elif header_rest is not None:
+            ws.cell(row=1, column=col_idx).fill = header_rest
+
+    _autofit_worksheet_columns(ws)
+
+
+def _format_mismatch_worksheet(ws) -> None:
+    """Лист «… Несоответствия»."""
+    _format_worksheet_columns(ws, _MISMATCH_COLUMN_FILL_HEX)
+
+
+def _format_bill_to_worksheet(ws) -> None:
+    """Лист «… Привязка Bill-to по ИНН»."""
+    _format_worksheet_columns(ws, _BILL_TO_COLUMN_FILL_HEX)
+
+
+def _format_exception_worksheet(ws) -> None:
+    """Лист Exception — жёлтая шапка."""
+    from openpyxl.styles import PatternFill
+
+    if not ws.max_column or not ws.max_row:
+        return
+
+    yellow = PatternFill(fill_type="solid", fgColor=_FILL_YELLOW)
+    for col_idx in range(1, ws.max_column + 1):
+        ws.cell(row=1, column=col_idx).fill = yellow
+    _autofit_worksheet_columns(ws)
+
+
+def _write_mismatch_sheet(writer: pd.ExcelWriter, sheet_name: str, df: pd.DataFrame) -> None:
+    safe = _excel_sheet_name_safe(sheet_name)
+    df.to_excel(writer, sheet_name=safe, index=False)
+    _format_mismatch_worksheet(writer.sheets[safe])
+
+
+def _write_bill_to_sheet(writer: pd.ExcelWriter, sheet_name: str, df: pd.DataFrame) -> None:
+    safe = _excel_sheet_name_safe(sheet_name)
+    df.to_excel(writer, sheet_name=safe, index=False)
+    _format_bill_to_worksheet(writer.sheets[safe])
+
+
+def _write_exception_sheet(writer: pd.ExcelWriter, df: pd.DataFrame) -> None:
+    safe = _excel_sheet_name_safe("Exception")
+    df.to_excel(writer, sheet_name=safe, index=False)
+    _format_exception_worksheet(writer.sheets[safe])
+
+
 def _mismatch_sheet_label(so_token: str) -> str:
     """Как у Bill-to: префикс SOrg + тема листа."""
     so = _norm(so_token)
@@ -1276,11 +1424,13 @@ def add_mismatch_sheets(
             sub = _slice_errors_for_sorg(folder_so)
             prep = _prep_mismatch_sheet(sub)
             if prep.empty:
-                pd.DataFrame({"Сообщение": [_msg_empty_so(so_key)]}).to_excel(
-                    writer, sheet_name=title, index=False
+                _write_mismatch_sheet(
+                    writer,
+                    title,
+                    pd.DataFrame({"Сообщение": [_msg_empty_so(so_key)]}),
                 )
             else:
-                prep.to_excel(writer, sheet_name=title, index=False)
+                _write_mismatch_sheet(writer, title, prep)
         return
 
     prep = _prep_mismatch_sheet(errors_df)
@@ -1290,13 +1440,15 @@ def add_mismatch_sheets(
                 so_key = _norm(so_val) or "ALL"
                 title = _unique_excel_sheet_name(_mismatch_sheet_label(so_key), used)
                 used.add(title)
-                grp.to_excel(writer, sheet_name=title, index=False)
+                _write_mismatch_sheet(writer, title, grp)
         else:
-            prep.to_excel(writer, sheet_name=_excel_sheet_name_safe("Несоответствия"), index=False)
+            _write_mismatch_sheet(writer, _excel_sheet_name_safe("Несоответствия"), prep)
     else:
         msg = placeholder_message or "Нет данных"
-        pd.DataFrame({"Сообщение": [msg]}).to_excel(
-            writer, sheet_name=_excel_sheet_name_safe("Несоответствия"), index=False
+        _write_mismatch_sheet(
+            writer,
+            _excel_sheet_name_safe("Несоответствия"),
+            pd.DataFrame({"Сообщение": [msg]}),
         )
 
 
@@ -1331,10 +1483,9 @@ def save_excel(
 
             # Sheet 3: Exception
             if not exc_df.empty:
-                exc_df.to_excel(w, sheet_name="Exception", index=False)
+                _write_exception_sheet(w, exc_df)
             else:
-                pd.DataFrame({"Сообщение": ["Нет записей-исключений"]}).to_excel(
-                    w, sheet_name="Exception", index=False)
+                _write_exception_sheet(w, pd.DataFrame({"Сообщение": ["Нет записей-исключений"]}))
 
     try:
         _write(out_file)
@@ -1343,8 +1494,9 @@ def save_excel(
         _write(pair_dir / f"Check PF BP-PY-ZY {pair_name} {date_str} - Необходимый итоговый файл_{ts}.xlsx")
 
     if not errors_df.empty:
-        _prep_mismatch_sheet(errors_df).to_excel(
-            pair_dir / f"{pair_name}_ErrorsOnly.xlsx", index=False)
+        err_only = pair_dir / f"{pair_name}_ErrorsOnly.xlsx"
+        with pd.ExcelWriter(err_only, engine="openpyxl") as w:
+            _write_mismatch_sheet(w, "Несоответствия", _prep_mismatch_sheet(errors_df))
     with pd.ExcelWriter(pair_dir / f"{pair_name}_BillToByINN.xlsx", engine="openpyxl") as w:
         add_bill_to_sheets(w, bill_to_df, bill_to_sorg_folders, placeholder_message=ph)
 

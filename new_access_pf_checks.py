@@ -45,6 +45,9 @@ from build_checks import (
     _attach_comment_om,
     _prep_bill_to_sheet,
     _prep_mismatch_sheet,
+    _write_mismatch_sheet,
+    _write_bill_to_sheet,
+    _write_exception_sheet,
     _read_base,
     _read_partner,
     _so_col,
@@ -477,7 +480,7 @@ def save_pair_excel(
     pair_dir = OUTPUT_DIR / pair_name
     pair_dir.mkdir(parents=True, exist_ok=True)
     date_str = datetime.now().strftime("%d.%m.%Y")
-    out_file = pair_dir / f"Check PF BP-PY-ZY {pair_name} {date_str} - Access.xlsx"
+    out_file = pair_dir / f"Check PF BP-PY-ZY {pair_name} {date_str}.xlsx"
 
     with pd.ExcelWriter(out_file, engine="openpyxl") as w:
         used: set[str] = set()
@@ -495,12 +498,14 @@ def save_pair_excel(
                 )
             prep = _prep_mismatch_sheet(sub)
             if prep.empty:
-                pd.DataFrame({"Сообщение": [f"Нет несоответствий для SO {so_key}"]}).to_excel(
-                    w, sheet_name=title, index=False
+                _write_mismatch_sheet(
+                    w,
+                    title,
+                    pd.DataFrame({"Сообщение": [f"Нет несоответствий для SO {so_key}"]}),
                 )
                 print(f"[new_access] лист «{title}»: 0 несоответствий", flush=True)
             else:
-                prep.to_excel(w, sheet_name=title, index=False)
+                _write_mismatch_sheet(w, title, prep)
                 print(f"[new_access] лист «{title}»: {len(prep)} несоответствий", flush=True)
 
         for folder_so in sorg_folders:
@@ -512,16 +517,16 @@ def save_pair_excel(
             grp_raw = _bill_to_rows_access(bill_to_df, so_key)
             grp = _prep_bill_to_sheet(grp_raw) if not grp_raw.empty else pd.DataFrame(columns=BILL_TO_COLS)
             if grp.empty:
-                pd.DataFrame(columns=BILL_TO_COLS).to_excel(w, sheet_name=title, index=False)
+                _write_bill_to_sheet(w, title, pd.DataFrame(columns=BILL_TO_COLS))
                 print(f"[new_access] лист «{title}»: 0 Bill-to", flush=True)
             else:
-                grp.to_excel(w, sheet_name=title, index=False)
+                _write_bill_to_sheet(w, title, grp)
                 print(f"[new_access] лист «{title}»: {len(grp)} Bill-to", flush=True)
 
         if not exc_df.empty:
-            exc_df.to_excel(w, sheet_name="Exception", index=False)
+            _write_exception_sheet(w, exc_df)
         else:
-            pd.DataFrame({"Сообщение": ["Нет записей-исключений"]}).to_excel(w, sheet_name="Exception", index=False)
+            _write_exception_sheet(w, pd.DataFrame({"Сообщение": ["Нет записей-исключений"]}))
 
     print(f"[new_access] сохранено: {out_file}", flush=True)
 
