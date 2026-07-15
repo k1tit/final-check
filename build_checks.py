@@ -373,6 +373,7 @@ def read_excel_via_com(path: Path) -> pd.DataFrame:
         rows = [list(r) for r in raw]
 
     header = ["" if c is None else str(c).strip() for c in rows[0]]
+    header = _dedupe_column_labels(header)
     data = rows[1:]
     df = pd.DataFrame(data, columns=header)
     return df.astype(str).replace({"None": "", "nan": "", "<NA>": ""})
@@ -443,24 +444,73 @@ def _read_excel_checked(
     return df
 
 
+def _dedupe_column_labels(columns) -> list[str]:
+    """Повтор имени → Name.1, Name.2… (pandas и Excel COM с двумя OrBlk)."""
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for raw in columns:
+        name = "" if raw is None else str(raw).strip()
+        if name == "":
+            name = "col"
+        n = seen.get(name, 0)
+        seen[name] = n + 1
+        out.append(name if n == 0 else f"{name}.{n}")
+    return out
+
+
 def _normalize_orblk_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Выгрузка макроса: OrBlk + OrBlk2.
-    Access / SAP Base: OrBlk + OrBlk1 (OrBlk1 — второй блок, по нему Bill-to = M).
+    Внутренний вид Access: OrBlk (Bill-to = M) + OrBlk1 (второй блок).
 
-    В xlsx поля переставлены: OrBlk2 = SAP OrBlk, OrBlk = SAP OrBlk1.
-    Без перестановки Bill-to (M) попадает в OrBlk2, а проверки смотрят OrBlk → ложные ошибки.
+    Макрос: два столбца OrBlk / OrBlk+OrBlk2 / OrBlk+OrBlk.1 — значения переставлены:
+      2-й столбец файла = Access OrBlk (M)
+      1-й столбец файла = Access OrBlk1
+
+    Без swap M остаётся во 2-й колонке → десятки тысяч ложных
+    «Ship-to прикреплён к BP без OB M» (типично 3802 с OrBlk.1).
+
+    Уже Access (OrBlk+OrBlk1 без OrBlk2/OrBlk.1) — не трогаем.
+    В отчёт: OrBlk→OrBlk1, OrBlk1→OrBlk2 (to_export_orblk_names).
     """
-    if "OrBlk1" in df.columns or "OrBlk" not in df.columns:
+    if df is None or df.empty:
         return df
-    if "OrBlk2" not in df.columns:
+
+    out = df.copy()
+    if len(out.columns) != len(set(map(str, out.columns))):
+        out.columns = _dedupe_column_labels(out.columns)
+
+    # OrBlk.1 (дубль заголовка) = второй столбец макроса = OrBlk2
+    if "OrBlk.1" in out.columns and "OrBlk2" not in out.columns:
+        out = out.rename(columns={"OrBlk.1": "OrBlk2"})
+    elif "OrBlk.1" in out.columns and "OrBlk2" in out.columns:
+        out = out.drop(columns=["OrBlk.1"])
+
+    # Уже Access OrBlk+OrBlk1 — без макросного второго столбца
+    if "OrBlk1" in out.columns and "OrBlk2" not in out.columns:
+        return out
+
+    if "OrBlk" not in out.columns:
+        return out
+
+    if "OrBlk2" in out.columns:
+        return out.rename(columns={"OrBlk": "OrBlk1", "OrBlk2": "OrBlk"})
+
+    return out
+
+
+def to_export_orblk_names(df: pd.DataFrame) -> pd.DataFrame:
+    """Access b.OrBlk AS OrBlk1, b.OrBlk1 AS OrBlk2 — внешний вид отчёта."""
+    if df is None or df.empty:
         return df
-    out = df.rename(columns={"OrBlk": "OrBlk1", "OrBlk2": "OrBlk"})
+    out = df.copy()
+    if "OrBlk" in out.columns and "OrBlk1" in out.columns and "OrBlk2" not in out.columns:
+        out = out.rename(columns={"OrBlk1": "OrBlk2", "OrBlk": "OrBlk1"})
+    elif "OrBlk" in out.columns and "OrBlk1" not in out.columns:
+        out = out.rename(columns={"OrBlk": "OrBlk1"})
     return out
 
 
 def _normalize_base_df(df: pd.DataFrame, folder: str) -> pd.DataFrame:
-    df = df.rename(columns={"OrBlk.1": "OrBlk1"})
     df = _normalize_orblk_columns(df)
     so = _so_col(df)
     if so and so != "SO":

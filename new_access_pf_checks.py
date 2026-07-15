@@ -56,6 +56,7 @@ from build_checks import (
     exception_keys,
     load_runtime_paths_dict,
     _norm_cust,
+    to_export_orblk_names,
 )
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -155,6 +156,8 @@ def attach_partner_access(
     base_dd: pd.DataFrame,
     partner_df: pd.DataFrame | None,
     prefix: str,
+    *,
+    master_lookup: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Access:
@@ -164,8 +167,9 @@ def attach_partner_access(
       ) ON b.Customer = sub.Customer
     """
     result = base_dd.copy()
-    ob = _col(base_dd, "OrBlk", "OrBlk 1")
-    ob1 = _col(base_dd, "OrBlk1", "OrBlk 1")
+    lookup_src = master_lookup if master_lookup is not None else base_dd
+    ob = _col(lookup_src, "OrBlk", "OrBlk 1")
+    ob1 = _col(lookup_src, "OrBlk1", "OrBlk 1")
     pcols = [prefix, f"{prefix} Name", f"{prefix} Tax Number 1", f"{prefix} OrBlk1", f"{prefix} OrBlk2"]
 
     if partner_df is None or partner_df.empty:
@@ -174,7 +178,7 @@ def attach_partner_access(
             result[c] = ""
         return result
 
-    lookup = _master_lookup(base_dd)
+    lookup = _master_lookup(lookup_src)
     rename_d = {"Customer": "_lk_cust", "Name": "_lk_name", "Tax Number 1": "_lk_tax"}
     if ob:
         rename_d[ob] = "_lk_ob1"
@@ -223,12 +227,15 @@ def merge_all_partners_access(
     bp_df: pd.DataFrame | None,
     py_df: pd.DataFrame | None,
     zy_df: pd.DataFrame | None,
+    *,
+    master_lookup: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Цепочка LEFT JOIN BP → PY → ZY; ровно одна строка на Customer."""
+    lk = master_lookup if master_lookup is not None else base_dd
     n0 = len(base_dd)
-    result = attach_partner_access(base_dd, bp_df, "BP")
-    result = attach_partner_access(result, py_df, "PY")
-    result = attach_partner_access(result, zy_df, "ZY")
+    result = attach_partner_access(base_dd, bp_df, "BP", master_lookup=lk)
+    result = attach_partner_access(result, py_df, "PY", master_lookup=lk)
+    result = attach_partner_access(result, zy_df, "ZY", master_lookup=lk)
     if len(result) != n0:
         raise RuntimeError(f"merge partners: строк {n0} → {len(result)} (many-to-many)")
     if result["Customer"].duplicated().any():
@@ -338,17 +345,13 @@ def add_checks_access(df: pd.DataFrame) -> pd.DataFrame:
     def _s(col: str) -> pd.Series:
         return out[col].fillna("").astype(str).str.strip() if col in out.columns else pd.Series("", index=out.index)
 
-    if "OrBlk" in out.columns and "OrBlk1" not in out.columns:
-        out = out.rename(columns={"OrBlk": "OrBlk1"})
-    elif "OrBlk" in out.columns and "OrBlk1" in out.columns:
-        out = out.rename(columns={"OrBlk1": "OrBlk2", "OrBlk": "OrBlk1"})
-
-    orblk1 = _s("OrBlk1").str.upper()
+    # Access OrBlk (= export OrBlk1) — Bill-to при M. Проверки до переименования в отчёт.
+    orblk = _s("OrBlk").str.upper() if "OrBlk" in out.columns else _s("OrBlk1").str.upper()
     bp_orblk1 = _s("BP OrBlk1").str.upper()
     bp, py, zy = _s("BP"), _s("PY"), _s("ZY")
     cust, tax, bp_tax, bp_name = _s("Customer"), _s("Tax Number 1"), _s("BP Tax Number 1"), _s("BP Name")
 
-    out["Cust OrBlk Bill-to"] = np.where(orblk1 == "M", "Bill-to", "Ship-to")
+    out["Cust OrBlk Bill-to"] = np.where(orblk == "M", "Bill-to", "Ship-to")
     out["BP OrBlk Bill-to"] = np.where(bp_orblk1 == "M", "Bill-to", "Ship-to")
     out["Check BP-PY-ZY"] = np.where((bp == py) & (bp == zy), "TRUE", "FALSE")
     out["Check Tax Number Cust&BP"] = np.where(tax == bp_tax, "TRUE", "FALSE")
@@ -364,15 +367,15 @@ def add_checks_access(df: pd.DataFrame) -> pd.DataFrame:
     comment = comment.mask(~bp_mismatch & tax_mismatch, "Несоответствие ИНН Cust и BP")
     comment = comment.mask(~bp_mismatch & ~tax_mismatch & (bp_name == ""), "BP помечен на удаление")
     comment = comment.mask(
-        ~bp_mismatch & ~tax_mismatch & (bp_name != "") & (orblk1 == "M") & cust_ne_bp,
+        ~bp_mismatch & ~tax_mismatch & (bp_name != "") & (orblk == "M") & cust_ne_bp,
         "Bill-to прикреплён к другому Bill-to",
     )
     comment = comment.mask(
-        ~bp_mismatch & ~tax_mismatch & (bp_name != "") & (orblk1 != "M") & (bp_orblk1 != "M") & cust_ne_bp,
+        ~bp_mismatch & ~tax_mismatch & (bp_name != "") & (orblk != "M") & (bp_orblk1 != "M") & cust_ne_bp,
         "Ship-to прикреплён к BP без OB M",
     )
     out["Comment MD Analyst"] = comment
-    return out
+    return to_export_orblk_names(out)
 
 
 def build_bill_to_access(df_checks: pd.DataFrame, base_dd: pd.DataFrame) -> pd.DataFrame:
@@ -544,7 +547,7 @@ def process_sorg(folder: str, exc_keys: set[tuple[str, str]]) -> tuple[pd.DataFr
     if base.empty:
         return pd.DataFrame(), pd.DataFrame(), base_raw
 
-    merged = merge_all_partners_access(base, bp_df, py_df, zy_df)
+    merged = merge_all_partners_access(base, bp_df, py_df, zy_df, master_lookup=base_raw)
     filtered = apply_filters_access(merged)
     if filtered.empty:
         return pd.DataFrame(), pd.DataFrame(), base_raw
