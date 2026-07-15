@@ -544,7 +544,8 @@ def _normalize_partner_df(df: pd.DataFrame, folder: str, *, kind: str = "partner
     out["KUNNR"] = _nc(out["KUNNR"])
     out["KTONR"] = _nc(out["KTONR"])
     out["_folder"] = folder
-    return out.dropna(subset=["KUNNR"]).drop_duplicates(subset=["KUNNR", "_folder"], keep="first")
+    # Access не Distinct по KUNNR — дубли партнёрских строк сохраняем
+    return out.dropna(subset=["KUNNR"])
 
 
 def _read_partner(

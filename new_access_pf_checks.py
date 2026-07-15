@@ -186,7 +186,8 @@ def attach_partner_access(
         rename_d[ob1] = "_lk_ob2"
     d = lookup.rename(columns=rename_d)
 
-    pf = partner_df[["KUNNR", "KTONR"]].drop_duplicates(subset=["KUNNR"], keep="first").copy()
+    # Access не делает Distinct/First по KUNNR — дубли партнёра размножают строки
+    pf = partner_df[["KUNNR", "KTONR"]].copy()
     pf["KUNNR"] = _nc(pf["KUNNR"])
     pf["KTONR"] = _nc(pf["KTONR"])
     pf = pf.rename(columns={"KUNNR": "Customer", "KTONR": prefix})
@@ -204,10 +205,11 @@ def attach_partner_access(
         if c not in sub.columns:
             sub[c] = ""
 
-    sub = sub[["Customer"] + pcols].drop_duplicates(subset=["Customer"], keep="first")
+    sub = sub[["Customer"] + pcols]
 
     result = result.drop(columns=[c for c in pcols if c in result.columns], errors="ignore")
-    result = result.merge(sub, on="Customer", how="left", validate="one_to_one")
+    # Access: LEFT JOIN без Distinct — возможны many-to-many
+    result = result.merge(sub, on="Customer", how="left")
 
     for c in pcols:
         if c not in result.columns:
@@ -230,17 +232,11 @@ def merge_all_partners_access(
     *,
     master_lookup: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Цепочка LEFT JOIN BP → PY → ZY; ровно одна строка на Customer."""
+    """Цепочка LEFT JOIN BP → PY → ZY (Access может размножить строки)."""
     lk = master_lookup if master_lookup is not None else base_dd
-    n0 = len(base_dd)
     result = attach_partner_access(base_dd, bp_df, "BP", master_lookup=lk)
     result = attach_partner_access(result, py_df, "PY", master_lookup=lk)
     result = attach_partner_access(result, zy_df, "ZY", master_lookup=lk)
-    if len(result) != n0:
-        raise RuntimeError(f"merge partners: строк {n0} → {len(result)} (many-to-many)")
-    if result["Customer"].duplicated().any():
-        dup = result.groupby("Customer").size().sort_values(ascending=False)
-        raise RuntimeError(f"merge partners: дубли Customer, max={dup.iloc[0]}")
     return result
 
 
@@ -363,7 +359,7 @@ def add_checks_access(df: pd.DataFrame) -> pd.DataFrame:
 
     comment = pd.Series("", index=out.index)
     comment = comment.mask(bp_mismatch & ~tax_mismatch, "Несоответствие BP-PY-ZY")
-    comment = comment.mask(bp_mismatch & tax_mismatch, "Несоответствие BP-PY-ZY; несоответствие ИНН SP и BP")
+    comment = comment.mask(bp_mismatch & tax_mismatch, "Несоответствие BP-PY-ZY; несоответствие ИНН Cust и BP")
     comment = comment.mask(~bp_mismatch & tax_mismatch, "Несоответствие ИНН Cust и BP")
     comment = comment.mask(~bp_mismatch & ~tax_mismatch & (bp_name == ""), "BP помечен на удаление")
     comment = comment.mask(
@@ -381,7 +377,8 @@ def add_checks_access(df: pd.DataFrame) -> pd.DataFrame:
 def build_bill_to_access(df_checks: pd.DataFrame, base_dd: pd.DataFrame) -> pd.DataFrame:
     """
     q_*_Joined_3_BillToByINN:
-    INNER JOIN b ON j.[Tax Number 1] = b.[Tax Number 1], b.OrBlk = 'M'.
+    Access SQL: INNER JOIN только по Tax Number 1, b.OrBlk = 'M'
+    (в черновике docx упомянут ещё SO — в access.txt SO в ON нет).
     Без groupby/drop_duplicates после join — Access размножает строки.
     """
     if df_checks.empty or base_dd.empty:
@@ -413,6 +410,8 @@ def build_bill_to_access(df_checks: pd.DataFrame, base_dd: pd.DataFrame) -> pd.D
     so_c = _so_col(pool2)
     if so_c:
         rename_p2[so_c] = "BP SO"
+    elif "_folder" in pool2.columns:
+        rename_p2["_folder"] = "BP SO"
     for src, dst in {
         "Name": "BP Name",
         "Tax Number 1": "BP Tax Number 1",
@@ -437,6 +436,7 @@ def build_bill_to_access(df_checks: pd.DataFrame, base_dd: pd.DataFrame) -> pd.D
     pool2["_tax"] = _ns(pool2["BP Tax Number 1"])
 
     p2_cols = ["_tax"] + [c for c in _BILL_TO_B_SIDE if c in pool2.columns]
+    # Access: ON j.[Tax Number 1] = b.[Tax Number 1] (без SO)
     joined = pool1_j.merge(pool2[p2_cols], on="_tax", how="inner")
     joined = joined.drop(columns=["_tax"], errors="ignore")
 
@@ -553,11 +553,8 @@ def process_sorg(folder: str, exc_keys: set[tuple[str, str]]) -> tuple[pd.DataFr
         return pd.DataFrame(), pd.DataFrame(), base_raw
 
     checked = add_checks_access(filtered)
+    # Access ErrorsOnly: Comment не пустой; без Distinct и без фильтра по BP Name
     errors = checked[checked["Comment MD Analyst"].fillna("").astype(str).str.strip() != ""].copy()
-    if not errors.empty:
-        errors = errors.drop_duplicates(subset=["Customer"], keep="first")
-        # Эталон Access (3801): 110 строк; лишние у нас — с пустым BP Name (нет строки в Base_DelDup).
-        errors = errors[errors["BP Name"].fillna("").astype(str).str.strip().ne("")].copy()
     bill_to = build_bill_to_access(checked, base_raw)
 
     if os.environ.get("REPORTS_DEBUG"):
