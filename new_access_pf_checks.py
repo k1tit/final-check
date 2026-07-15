@@ -784,13 +784,13 @@ def _interactive_menu() -> tuple[str, str, bool, bool, int]:
     all_f = ", ".join(_all_so_folders())
     print("\n=== PF BP-PY-ZY — выбор режима ===", flush=True)
     print("  1  Все 3 пары (3801_3803, 3802_3804, 3805_3806) — 3 файла", flush=True)
-    print("  5  Одна пара — 1 файл на выбор:", flush=True)
+    print("  2  Одна пара — 1 файл на выбор:", flush=True)
     for i, (name, cfg) in enumerate(PAIRS.items(), start=1):
         print(f"       {i}  {name} ({', '.join(cfg['folders'])})", flush=True)
-    print("  2  Все SOrg по отдельности — по 1 файлу на каждую", flush=True)
+    print("  3  Все SOrg по отдельности — по 1 файлу на каждую", flush=True)
     print(f"     ({all_f})", flush=True)
-    print("  3  Выбранные SOrg по отдельности (через запятую)", flush=True)
-    print("  4  Своя группа SOrg в одном файле", flush=True)
+    print("  4  Выбранные SOrg по отдельности (через запятую)", flush=True)
+    print("  5  Своя группа SOrg в одном файле", flush=True)
     print("  0  Выход", flush=True)
 
     choice = _read_menu_line("Выбор [1]: ", "1")
@@ -804,7 +804,7 @@ def _interactive_menu() -> tuple[str, str, bool, bool, int]:
         folders = _read_menu_line(
             "Только пары, содержащие SOrg (Enter = все 3 пары): ",
         )
-    elif choice == "5":
+    elif choice == "2":
         mode = "one_pair"
         default_pair = _resolve_pair_name("1") or list(PAIRS.keys())[0]
         pair_pick = _read_menu_line(
@@ -817,12 +817,12 @@ def _interactive_menu() -> tuple[str, str, bool, bool, int]:
             raise SystemExit(1)
         folders = resolved
         print(f"[new_access] выбрана пара {resolved} ({', '.join(PAIRS[resolved]['folders'])})", flush=True)
-    elif choice == "2":
-        mode = "single"
     elif choice == "3":
+        mode = "single"
+    elif choice == "4":
         mode = "custom_single"
         folders = _read_menu_line(f"SOrg через запятую [{all_f}]: ", all_f)
-    elif choice == "4":
+    elif choice == "5":
         mode = "custom_group"
         folders = _read_menu_line("SOrg через запятую: ")
         if not _parse_folders(folders):
