@@ -722,6 +722,12 @@ def build_jobs(mode: str, folders_csv: str = "") -> list[tuple[str, list[str]]]:
                 if filtered:
                     jobs = filtered
         return jobs
+    if mode == "one_pair":
+        name = _resolve_pair_name(folders_csv)
+        if not name:
+            known = ", ".join(PAIRS.keys())
+            raise ValueError(f"Неизвестная пара: {folders_csv!r}. Доступны: {known}")
+        return [(name, PAIRS[name]["folders"])]
     all_f = _all_so_folders()
     if mode == "single":
         return [(f, [f]) for f in all_f]
@@ -732,6 +738,36 @@ def build_jobs(mode: str, folders_csv: str = "") -> list[tuple[str, list[str]]]:
         name = "_".join(sel)
         return [(f"custom_{name}", sel)]
     raise ValueError(f"Неизвестный режим: {mode}")
+
+
+def _resolve_pair_name(raw: str) -> str | None:
+    """1 / 3801_3803 / 3802 → имя пары из PAIRS."""
+    text = raw.strip()
+    if not text:
+        return None
+    if text in PAIRS:
+        return text
+    pair_names = list(PAIRS.keys())
+    if text.isdigit():
+        idx = int(text)
+        if 1 <= idx <= len(pair_names):
+            return pair_names[idx - 1]
+    compact = text.replace(" ", "")
+    for name in pair_names:
+        if name == compact or name in compact:
+            return name
+    sel = set(_parse_folders(text))
+    if sel:
+        matches = [
+            n for n, cfg in PAIRS.items() if sel.intersection(set(cfg["folders"]))
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            exact = [n for n in matches if sel == set(PAIRS[n]["folders"])]
+            if len(exact) == 1:
+                return exact[0]
+    return None
 
 
 def _read_menu_line(prompt: str, default: str = "") -> str:
@@ -747,7 +783,10 @@ def _interactive_menu() -> tuple[str, str, bool, bool, int]:
     """Консольное меню режимов (без веба)."""
     all_f = ", ".join(_all_so_folders())
     print("\n=== PF BP-PY-ZY — выбор режима ===", flush=True)
-    print("  1  Пары SOrg (3801_3803, 3802_3804, 3805_3806) — 3 файла", flush=True)
+    print("  1  Все 3 пары (3801_3803, 3802_3804, 3805_3806) — 3 файла", flush=True)
+    print("  5  Одна пара — 1 файл на выбор:", flush=True)
+    for i, (name, cfg) in enumerate(PAIRS.items(), start=1):
+        print(f"       {i}  {name} ({', '.join(cfg['folders'])})", flush=True)
     print("  2  Все SOrg по отдельности — по 1 файлу на каждую", flush=True)
     print(f"     ({all_f})", flush=True)
     print("  3  Выбранные SOrg по отдельности (через запятую)", flush=True)
@@ -765,6 +804,19 @@ def _interactive_menu() -> tuple[str, str, bool, bool, int]:
         folders = _read_menu_line(
             "Только пары, содержащие SOrg (Enter = все 3 пары): ",
         )
+    elif choice == "5":
+        mode = "one_pair"
+        default_pair = _resolve_pair_name("1") or list(PAIRS.keys())[0]
+        pair_pick = _read_menu_line(
+            f"Какая пара [1={default_pair}]: ",
+            "1",
+        )
+        resolved = _resolve_pair_name(pair_pick)
+        if not resolved:
+            print(f"[new_access] не удалось распознать пару «{pair_pick}» — выход", flush=True)
+            raise SystemExit(1)
+        folders = resolved
+        print(f"[new_access] выбрана пара {resolved} ({', '.join(PAIRS[resolved]['folders'])})", flush=True)
     elif choice == "2":
         mode = "single"
     elif choice == "3":
@@ -803,7 +855,7 @@ def _interactive_menu() -> tuple[str, str, bool, bool, int]:
         "    • для быстрой проверки одной SOrg проще читать xlsx напрямую",
         flush=True,
     )
-    print("  Рекомендация: Y для обычного полного прогона (3 пары).", flush=True)
+    print("  Рекомендация: Y; для одной пары staging грузит только 2 SOrg.", flush=True)
     staging = _read_menu_line("DuckDB staging? [Y/n]: ", "Y")
     no_staging = staging.lower() in ("n", "no", "0", "н", "нет")
 
@@ -878,14 +930,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="PF BP-PY-ZY — логика Access")
     parser.add_argument(
         "--mode",
-        choices=["pairs", "single", "custom_single", "custom_group"],
+        choices=["pairs", "one_pair", "single", "custom_single", "custom_group"],
         default=None,
         help="Режим (без --no-menu откроется консольное меню)",
     )
     parser.add_argument(
         "--folders",
         default="",
-        help="SOrg через запятую (фильтр пар или список для custom_*)",
+        help="SOrg через запятую, имя пары (3802_3804) для one_pair, или фильтр пар",
     )
     parser.add_argument(
         "--no-menu",

@@ -118,7 +118,8 @@ python new_access_pf_checks.py
 
 ```
 === PF BP-PY-ZY — выбор режима ===
-  1  Пары SOrg (3801_3803, 3802_3804, 3805_3806) — 3 файла
+  1  Все 3 пары (3801_3803, 3802_3804, 3805_3806) — 3 файла
+  5  Одна пара — 1 файл (выбор: 3801_3803 / 3802_3804 / 3805_3806)
   2  Все SOrg по отдельности
   3  Выбранные SOrg по отдельности
   4  Своя группа SOrg в одном файле
@@ -137,6 +138,7 @@ python new_access_pf_checks.py
 
 ```powershell
 python new_access_pf_checks.py --no-menu --mode pairs
+python new_access_pf_checks.py --no-menu --mode one_pair --folders 3802_3804
 python new_access_pf_checks.py --no-menu --mode single
 python new_access_pf_checks.py --no-menu --mode custom_group --folders 3801,3803
 ```
@@ -146,8 +148,8 @@ python new_access_pf_checks.py --no-menu --mode custom_group --folders 3801,3803
 | Флаг | Описание |
 |------|----------|
 | `--no-menu` | Не показывать меню |
-| `--mode pairs\|single\|custom_single\|custom_group` | Режим работы |
-| `--folders 3801,3803` | Фильтр SOrg |
+| `--mode pairs\|one_pair\|single\|custom_single\|custom_group` | Режим работы |
+| `--folders 3802_3804` | Имя пары (one_pair) или фильтр SOrg |
 | `--no-staging` | Не использовать DuckDB, читать xlsx напрямую |
 | `--no-parallel` | Последовательная обработка |
 | `--workers N` | Число параллельных SOrg в паре |
