@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -443,8 +443,25 @@ def _read_excel_checked(
     return df
 
 
+def _normalize_orblk_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Выгрузка макроса: OrBlk + OrBlk2.
+    Access / SAP Base: OrBlk + OrBlk1 (OrBlk1 — второй блок, по нему Bill-to = M).
+
+    В xlsx поля переставлены: OrBlk2 = SAP OrBlk, OrBlk = SAP OrBlk1.
+    Без перестановки Bill-to (M) попадает в OrBlk2, а проверки смотрят OrBlk → ложные ошибки.
+    """
+    if "OrBlk1" in df.columns or "OrBlk" not in df.columns:
+        return df
+    if "OrBlk2" not in df.columns:
+        return df
+    out = df.rename(columns={"OrBlk": "OrBlk1", "OrBlk2": "OrBlk"})
+    return out
+
+
 def _normalize_base_df(df: pd.DataFrame, folder: str) -> pd.DataFrame:
     df = df.rename(columns={"OrBlk.1": "OrBlk1"})
+    df = _normalize_orblk_columns(df)
     so = _so_col(df)
     if so and so != "SO":
         df = df.rename(columns={so: "SO"})

@@ -227,6 +227,7 @@ python check_data_files.py
 | `BadZipFile` на 3804 BP | Файл на диске; открыть в Excel; перевыгрузить макросом; staging + COM |
 | Пустые листы при ненулевом логе | Обновить код (`git pull`) — фильтрация по `_folder` |
 | Режим 3–5 «не работает» | Смотреть `result/<SOrg>/`, не `result/3801_3803/`; проверить наличие `*Base*.xlsx` в папке SOrg |
+| Десятки тысяч «Ship-to прикреплён к BP без OB M» | Обновить код — исправлен маппинг OrBlk/OrBlk2 в выгрузке макроса (см. `build_checks._normalize_orblk_columns`) |
 | `ModuleNotFoundError: duckdb` | `python -m pip install -r requirements.txt` тем же Python, что запускает скрипт |
 
 ---
