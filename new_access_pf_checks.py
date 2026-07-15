@@ -678,24 +678,59 @@ async def process_pair_async(pair_name: str, folders: list[str], exc_df: pd.Data
 
 
 async def _run_all_pairs(jobs: list[tuple[str, list[str]]], exc_df: pd.DataFrame) -> int:
-    """Обрабатывает пары по очереди; каждая пара сохраняется сразу после своих SOrg."""
+    """Обрабатывает задания по очереди; каждое сохраняется сразу после своих SOrg."""
     errors = 0
-    for pair_name, folders in jobs:
-        print(f"[new_access] === пара {pair_name} ===", flush=True)
+    for job_name, folders in jobs:
+        label = f"SOrg {job_name}" if len(folders) == 1 and job_name in folders else f"пара {job_name}"
+        print(f"[new_access] === {label} ===", flush=True)
         try:
-            ok = await process_pair_async(pair_name, folders, exc_df)
+            ok = await process_pair_async(job_name, folders, exc_df)
             if not ok:
                 errors += 1
         except Exception as exc:
             errors += 1
-            print(f"[new_access] пара {pair_name}: критическая ошибка — {exc}", flush=True)
+            print(f"[new_access] {label}: критическая ошибка — {exc}", flush=True)
             traceback.print_exc()
     return errors
 
 
 def _all_so_folders() -> list[str]:
-    known = ["3801", "3802", "3803", "3804", "3805", "3806"]
-    return [f for f in known if (BASE_DIR / f).is_dir()] or known
+    """SOrg, для которых на диске есть папка и *Base*.xlsx."""
+    return _existing_sorg_folders()
+
+
+def _sorg_has_data(folder: str) -> bool:
+    fp = BASE_DIR / folder
+    if not fp.is_dir():
+        return False
+    return _get_file(fp, "*Base*.xlsx") is not None
+
+
+def _existing_sorg_folders(candidates: list[str] | None = None) -> list[str]:
+    known = candidates or ["3801", "3802", "3803", "3804", "3805", "3806"]
+    return [f for f in known if _sorg_has_data(f)]
+
+
+def _pair_data_status(folders: list[str]) -> tuple[list[str], list[str]]:
+    ok = [f for f in folders if _sorg_has_data(f)]
+    missing = [f for f in folders if f not in ok]
+    return ok, missing
+
+
+def _print_data_inventory() -> None:
+    on_disk = _existing_sorg_folders()
+    print(f"[new_access] SOrg с Base на диске: {', '.join(on_disk) if on_disk else 'нет'}", flush=True)
+    for name, cfg in PAIRS.items():
+        ok, miss = _pair_data_status(cfg["folders"])
+        if not miss:
+            print(f"[new_access]   пара {name}: готова ({', '.join(ok)})", flush=True)
+        elif ok:
+            print(
+                f"[new_access]   пара {name}: частично — есть {', '.join(ok)}, нет {', '.join(miss)}",
+                flush=True,
+            )
+        else:
+            print(f"[new_access]   пара {name}: нет данных ({', '.join(cfg['folders'])})", flush=True)
 
 
 def _parse_folders(raw: str) -> list[str]:
@@ -727,16 +762,43 @@ def build_jobs(mode: str, folders_csv: str = "") -> list[tuple[str, list[str]]]:
         if not name:
             known = ", ".join(PAIRS.keys())
             raise ValueError(f"Неизвестная пара: {folders_csv!r}. Доступны: {known}")
-        return [(name, PAIRS[name]["folders"])]
+        pair_folders = PAIRS[name]["folders"]
+        ok, miss = _pair_data_status(pair_folders)
+        if miss:
+            print(
+                f"[new_access] пара {name}: нет выгрузок для SO {', '.join(miss)} "
+                f"(листы будут пустые)",
+                flush=True,
+            )
+        if not ok:
+            raise ValueError(
+                f"Пара {name}: нет *Base*.xlsx ни для одной SOrg ({', '.join(pair_folders)}). "
+                f"Проверьте папку data."
+            )
+        return [(name, pair_folders)]
     all_f = _all_so_folders()
     if mode == "single":
+        if not all_f:
+            raise ValueError("Нет SOrg с *Base*.xlsx на диске — отдельная сборка невозможна.")
         return [(f, [f]) for f in all_f]
     sel = _parse_folders(folders_csv) or all_f
     if mode == "custom_single":
-        return [(f, [f]) for f in sel]
+        ready = [f for f in sel if _sorg_has_data(f)]
+        skipped = [f for f in sel if f not in ready]
+        if skipped:
+            print(f"[new_access] пропуск SOrg без Base: {', '.join(skipped)}", flush=True)
+        if not ready:
+            raise ValueError(f"Нет данных для SOrg: {', '.join(sel)}")
+        return [(f, [f]) for f in ready]
     if mode == "custom_group":
-        name = "_".join(sel)
-        return [(f"custom_{name}", sel)]
+        ready = [f for f in sel if _sorg_has_data(f)]
+        skipped = [f for f in sel if f not in ready]
+        if skipped:
+            print(f"[new_access] пропуск SOrg без Base: {', '.join(skipped)}", flush=True)
+        if not ready:
+            raise ValueError(f"Нет данных для группы SOrg: {', '.join(sel)}")
+        name = "_".join(ready)
+        return [(f"custom_{name}", ready)]
     raise ValueError(f"Неизвестный режим: {mode}")
 
 
@@ -786,7 +848,14 @@ def _interactive_menu() -> tuple[str, str, bool, bool, int]:
     print("  1  Все 3 пары (3801_3803, 3802_3804, 3805_3806) — 3 файла", flush=True)
     print("  2  Одна пара — 1 файл на выбор:", flush=True)
     for i, (name, cfg) in enumerate(PAIRS.items(), start=1):
-        print(f"       {i}  {name} ({', '.join(cfg['folders'])})", flush=True)
+        ok, miss = _pair_data_status(cfg["folders"])
+        if not miss:
+            tag = "данные есть"
+        elif ok:
+            tag = f"частично, нет {', '.join(miss)}"
+        else:
+            tag = "НЕТ данных"
+        print(f"       {i}  {name} ({', '.join(cfg['folders'])}) — {tag}", flush=True)
     print("  3  Все SOrg по отдельности — по 1 файлу на каждую", flush=True)
     print(f"     ({all_f})", flush=True)
     print("  4  Выбранные SOrg по отдельности (через запятую)", flush=True)
@@ -815,16 +884,39 @@ def _interactive_menu() -> tuple[str, str, bool, bool, int]:
         if not resolved:
             print(f"[new_access] не удалось распознать пару «{pair_pick}» — выход", flush=True)
             raise SystemExit(1)
+        ok, miss = _pair_data_status(PAIRS[resolved]["folders"])
+        if not ok:
+            print(
+                f"[new_access] пара {resolved}: нет *Base*.xlsx — выберите другую пару или положите выгрузки",
+                flush=True,
+            )
+            raise SystemExit(1)
+        if miss:
+            print(
+                f"[new_access] внимание: для {resolved} нет SO {', '.join(miss)} — эти листы будут пустые",
+                flush=True,
+            )
         folders = resolved
         print(f"[new_access] выбрана пара {resolved} ({', '.join(PAIRS[resolved]['folders'])})", flush=True)
     elif choice == "3":
         mode = "single"
+        if not _all_so_folders():
+            print("[new_access] нет SOrg с Base на диске — режим 3 недоступен", flush=True)
+            raise SystemExit(1)
     elif choice == "4":
         mode = "custom_single"
+        if not all_f:
+            print("[new_access] нет SOrg с Base на диске", flush=True)
+            raise SystemExit(1)
         folders = _read_menu_line(f"SOrg через запятую [{all_f}]: ", all_f)
+        if not _parse_folders(folders):
+            folders = all_f
     elif choice == "5":
         mode = "custom_group"
-        folders = _read_menu_line("SOrg через запятую: ")
+        if not all_f:
+            print("[new_access] нет SOrg с Base на диске", flush=True)
+            raise SystemExit(1)
+        folders = _read_menu_line(f"SOrg через запятую [{all_f}]: ", all_f)
         if not _parse_folders(folders):
             print("[new_access] не указаны SOrg — выход", flush=True)
             raise SystemExit(1)
@@ -976,6 +1068,8 @@ def main() -> int:
         print(f"[new_access] Нет каталога: {BASE_DIR}", flush=True)
         return 1
 
+    _print_data_inventory()
+
     use_menu = not args.no_menu and args.mode is None and sys.stdin.isatty()
     if use_menu:
         mode, folders_csv, no_staging, no_parallel, workers = _interactive_menu()
@@ -1014,6 +1108,16 @@ def main() -> int:
     )
     for job_name, job_folders in jobs:
         print(f"  • {job_name}: {', '.join(job_folders)}", flush=True)
+    if mode in ("single", "custom_single"):
+        print(
+            f"[new_access] отчёты: {OUTPUT_DIR}/<SOrg>/Check PF BP-PY-ZY <SOrg> <дата>.xlsx",
+            flush=True,
+        )
+    elif mode == "custom_group":
+        print(
+            f"[new_access] отчёт: {OUTPUT_DIR}/custom_<SOrg>/Check PF ... (один файл на группу)",
+            flush=True,
+        )
 
     exit_code = 0
     try:
@@ -1030,7 +1134,7 @@ def main() -> int:
             print(f"  [{mark}] {pair_file.name}{sorg_note}", flush=True)
         if pair_errors:
             exit_code = 1
-            print(f"[new_access] готово с ошибками в {pair_errors} парах", flush=True)
+            print(f"[new_access] готово с ошибками в {pair_errors} заданиях", flush=True)
         else:
             print("[new_access] готово", flush=True)
     except Exception:

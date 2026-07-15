@@ -172,14 +172,32 @@ python new_access_pf_checks.py --no-menu --mode custom_group --folders 3801,3803
 
 ## Результат
 
-Пример для пары `3802_3804`:
+**Пары (режимы 1–2):**
 
 ```
 data/result/3802_3804/
   Check PF BP-PY-ZY 3802_3804 10.06.2026.xlsx
 ```
 
-Внутри книги:
+**Отдельные SOrg (режимы 3–4)** — по одному файлу на каждую организацию:
+
+```
+data/result/3801/
+  Check PF BP-PY-ZY 3801 10.06.2026.xlsx
+data/result/3803/
+  Check PF BP-PY-ZY 3803 10.06.2026.xlsx
+```
+
+**Своя группа (режим 5):**
+
+```
+data/result/custom_3801_3803/
+  Check PF BP-PY-ZY custom_3801_3803 10.06.2026.xlsx
+```
+
+При старте скрипт показывает, какие SOrg реально есть на диске (`*Base*.xlsx`). Пары без выгрузок помечаются «НЕТ данных».
+
+Внутри книги (пара):
 
 - `3802 Несоответствия`, `3804 Несоответствия`
 - `3802 Привязка Bill-to по ИНН`, `3804 Привязка Bill-to по ИНН`
@@ -208,6 +226,7 @@ python check_data_files.py
 | `Нет каталога: ...base_dir` | `runtime_paths.json` → неверный `data_dir` |
 | `BadZipFile` на 3804 BP | Файл на диске; открыть в Excel; перевыгрузить макросом; staging + COM |
 | Пустые листы при ненулевом логе | Обновить код (`git pull`) — фильтрация по `_folder` |
+| Режим 3–5 «не работает» | Смотреть `result/<SOrg>/`, не `result/3801_3803/`; проверить наличие `*Base*.xlsx` в папке SOrg |
 | `ModuleNotFoundError: duckdb` | `python -m pip install -r requirements.txt` тем же Python, что запускает скрипт |
 
 ---
