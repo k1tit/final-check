@@ -114,16 +114,40 @@ python -m pip install -r requirements.txt
 python new_access_pf_checks.py
 ```
 
-или:
+или двойной клик по **`run_checks.cmd`** — откроется **консольное меню**:
+
+```
+=== PF BP-PY-ZY — выбор режима ===
+  1  Пары SOrg (3801_3803, 3802_3804, 3805_3806) — 3 файла
+  2  Все SOrg по отдельности
+  3  Выбранные SOrg по отдельности
+  4  Своя группа SOrg в одном файле
+  0  Выход
+```
+
+Далее — настройки с пояснениями «зачем» и «плюсы»:
+
+**DuckDB staging** — временная БД для xlsx: меньше повторного чтения, обход BadZipFile (3804 BP), один раз загрузить все 6 SOrg. Минус: долгий первый этап. Рекомендация: **Y**.
+
+**Параллельная обработка** — обе SOrg в паре одновременно (~×2 быстрее). Минус: больше RAM. Рекомендация: **Y**.
+
+**Workers** — сколько SOrg параллельно в задаче: **0** = авто (для пары обычно 2), **1** = экономия RAM, **2+** = для больших групп SOrg.
+
+**Без меню** (для скриптов/автоматизации):
 
 ```powershell
-run_checks.cmd
+python new_access_pf_checks.py --no-menu --mode pairs
+python new_access_pf_checks.py --no-menu --mode single
+python new_access_pf_checks.py --no-menu --mode custom_group --folders 3801,3803
 ```
 
 Флаги:
 
 | Флаг | Описание |
 |------|----------|
+| `--no-menu` | Не показывать меню |
+| `--mode pairs\|single\|custom_single\|custom_group` | Режим работы |
+| `--folders 3801,3803` | Фильтр SOrg |
 | `--no-staging` | Не использовать DuckDB, читать xlsx напрямую |
 | `--no-parallel` | Последовательная обработка |
 | `--workers N` | Число параллельных SOrg в паре |

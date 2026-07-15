@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import sys
 import time
 import traceback
@@ -456,7 +457,7 @@ def build_bill_to_access(df_checks: pd.DataFrame, base_dd: pd.DataFrame) -> pd.D
     joined["_st"] = joined["BP status"].map(status_order).fillna(1).astype(int)
     sort_cols = [c for c in ["Tax Number 1", "Customer", "_st", "BP Customer"] if c in joined.columns]
     joined = joined.sort_values(sort_cols, kind="stable").drop(columns=["_st"], errors="ignore")
-    return _prep_bill_to_sheet(joined.reset_index(drop=True))
+    return joined.reset_index(drop=True)
 
 
 def _bill_to_rows_access(bt: pd.DataFrame, so_key: str) -> pd.DataFrame:
@@ -627,7 +628,11 @@ def process_pair(pair_name: str, folders: list[str], exc_df: pd.DataFrame) -> bo
             print(f"[new_access] SO {folder}: ОШИБКА — {exc}", flush=True)
             traceback.print_exc()
     if not results:
-        print(f"[new_access] пара {pair_name}: нет успешных SO — отчёт не сохранён", flush=True)
+        print(
+            f"[new_access] пара {pair_name}: нет успешных SO — сохраняю пустой отчёт пары (2 листа SOrg)",
+            flush=True,
+        )
+        save_pair_excel(pair_name, pd.DataFrame(), pd.DataFrame(), exc_df, folders)
         return False
     return _merge_sorg_results(pair_name, folders, results, exc_df, failed_folders=failed)
 
@@ -663,7 +668,11 @@ async def process_pair_async(pair_name: str, folders: list[str], exc_df: pd.Data
         else:
             results.append((folder, item))
     if not results:
-        print(f"[new_access] пара {pair_name}: нет успешных SO — отчёт не сохранён", flush=True)
+        print(
+            f"[new_access] пара {pair_name}: нет успешных SO — сохраняю пустой отчёт пары (2 листа SOrg)",
+            flush=True,
+        )
+        save_pair_excel(pair_name, pd.DataFrame(), pd.DataFrame(), exc_df, folders)
         return False
     return _merge_sorg_results(pair_name, folders, results, exc_df, failed_folders=failed)
 
@@ -684,9 +693,205 @@ async def _run_all_pairs(jobs: list[tuple[str, list[str]]], exc_df: pd.DataFrame
     return errors
 
 
+def _all_so_folders() -> list[str]:
+    known = ["3801", "3802", "3803", "3804", "3805", "3806"]
+    return [f for f in known if (BASE_DIR / f).is_dir()] or known
+
+
+def _parse_folders(raw: str) -> list[str]:
+    if not raw:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for token in raw.split(","):
+        for f in re.findall(r"\d{4}", token.strip()):
+            if f not in seen:
+                out.append(f)
+                seen.add(f)
+    return out
+
+
+def build_jobs(mode: str, folders_csv: str = "") -> list[tuple[str, list[str]]]:
+    if mode == "pairs":
+        jobs = [(name, cfg["folders"]) for name, cfg in PAIRS.items()]
+        raw = folders_csv.strip()
+        if raw:
+            sel = set(_parse_folders(folders_csv))
+            if sel:
+                filtered = [(n, folders) for n, folders in jobs if sel.intersection(set(folders))]
+                if filtered:
+                    jobs = filtered
+        return jobs
+    all_f = _all_so_folders()
+    if mode == "single":
+        return [(f, [f]) for f in all_f]
+    sel = _parse_folders(folders_csv) or all_f
+    if mode == "custom_single":
+        return [(f, [f]) for f in sel]
+    if mode == "custom_group":
+        name = "_".join(sel)
+        return [(f"custom_{name}", sel)]
+    raise ValueError(f"Неизвестный режим: {mode}")
+
+
+def _read_menu_line(prompt: str, default: str = "") -> str:
+    try:
+        raw = input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print(flush=True)
+        raise SystemExit(0)
+    return raw if raw else default
+
+
+def _interactive_menu() -> tuple[str, str, bool, bool, int]:
+    """Консольное меню режимов (без веба)."""
+    all_f = ", ".join(_all_so_folders())
+    print("\n=== PF BP-PY-ZY — выбор режима ===", flush=True)
+    print("  1  Пары SOrg (3801_3803, 3802_3804, 3805_3806) — 3 файла", flush=True)
+    print("  2  Все SOrg по отдельности — по 1 файлу на каждую", flush=True)
+    print(f"     ({all_f})", flush=True)
+    print("  3  Выбранные SOrg по отдельности (через запятую)", flush=True)
+    print("  4  Своя группа SOrg в одном файле", flush=True)
+    print("  0  Выход", flush=True)
+
+    choice = _read_menu_line("Выбор [1]: ", "1")
+    if choice == "0":
+        raise SystemExit(0)
+
+    mode = "pairs"
+    folders = ""
+    if choice == "1":
+        mode = "pairs"
+        folders = _read_menu_line(
+            "Только пары, содержащие SOrg (Enter = все 3 пары): ",
+        )
+    elif choice == "2":
+        mode = "single"
+    elif choice == "3":
+        mode = "custom_single"
+        folders = _read_menu_line(f"SOrg через запятую [{all_f}]: ", all_f)
+    elif choice == "4":
+        mode = "custom_group"
+        folders = _read_menu_line("SOrg через запятую: ")
+        if not _parse_folders(folders):
+            print("[new_access] не указаны SOrg — выход", flush=True)
+            raise SystemExit(1)
+    else:
+        print(f"[new_access] неизвестный пункт «{choice}» — режим 1 (пары)", flush=True)
+
+    print("\n--- Настройки прогона ---", flush=True)
+
+    print("\n▸ DuckDB staging [Y/n]", flush=True)
+    print(
+        "  Зачем: один раз прочитать все xlsx и положить в временную БД data/staging.duckdb,\n"
+        "  дальше проверки берут данные из БД, а не с диска.",
+        flush=True,
+    )
+    print(
+        "  Плюсы включения (Y):\n"
+        "    • xlsx не открывается заново на каждой SOrg — меньше I/O, стабильнее прогон\n"
+        "    • обход BadZipFile: если pandas не читает файл (часто 3804 BP), на Windows\n"
+        "      срабатывает запасное чтение через установленный Excel\n"
+        "    • все 6 SOrg грузятся один раз в начале — удобно для полного прогона пар\n"
+        "    • в конце staging-таблицы удаляются автоматически",
+        flush=True,
+    )
+    print(
+        "  Минусы / когда n:\n"
+        "    • первый этап (загрузка в DuckDB) долгий — 10–20+ мин на больших выгрузках\n"
+        "    • нужен пакет duckdb (pip install duckdb)\n"
+        "    • для быстрой проверки одной SOrg проще читать xlsx напрямую",
+        flush=True,
+    )
+    print("  Рекомендация: Y для обычного полного прогона (3 пары).", flush=True)
+    staging = _read_menu_line("DuckDB staging? [Y/n]: ", "Y")
+    no_staging = staging.lower() in ("n", "no", "0", "н", "нет")
+
+    print("\n▸ Параллельная обработка [Y/n]", flush=True)
+    print(
+        "  Зачем: в одной задаче (например пара 3801+3803) обе SOrg считаются\n"
+        "  одновременно или строго по очереди.",
+        flush=True,
+    )
+    print(
+        "  Плюсы включения (Y):\n"
+        "    • быстрее на многоядерном ПК — 3801 и 3803 идут параллельно\n"
+        "    • для пары из 2 SOrg экономия времени почти в 2 раза на этапе проверок",
+        flush=True,
+    )
+    print(
+        "  Минусы / когда n:\n"
+        "    • выше расход RAM (две большие таблицы в памяти сразу)\n"
+        "    • проще читать лог и отлаживать ошибки по одной SOrg",
+        flush=True,
+    )
+    print("  Рекомендация: Y; при нехватке памяти или ошибках — n.", flush=True)
+    parallel = _read_menu_line("Параллельная обработка? [Y/n]: ", "Y")
+    no_parallel = parallel.lower() in ("n", "no", "0", "н", "нет")
+
+    workers = 0
+    if not no_parallel:
+        print("\n▸ Workers (число параллельных SOrg в одной задаче)", flush=True)
+        print(
+            "  Зачем: ограничить, сколько SOrg одновременно обрабатываются внутри\n"
+            "  одной задачи (одной пары или одной группы).",
+            flush=True,
+        )
+        print(
+            "  Плюсы / как выбирать:\n"
+            "    • 0 (авто) — скрипт сам подберёт (для пары 3801+3803 обычно 2 потока)\n"
+            "    • 1 — одна SOrg за раз; как «без параллели», минимум RAM\n"
+            "    • 2 — оптимально для пары из двух SOrg (3801 и 3803 одновременно)\n"
+            "    • 3–4 — имеет смысл в режиме 4 (своя группа из 3–4 SOrg в одном файле)",
+            flush=True,
+        )
+        print(
+            "  Когда менять с 0:\n"
+            "    • ПК тормозит / мало RAM → поставьте 1\n"
+            "    • большая группа SOrg и мощный ПК → 3 или 4",
+            flush=True,
+        )
+        print("  Рекомендация: 0 (авто) для режима «пары».", flush=True)
+        w_raw = _read_menu_line("Workers [0 = авто]: ", "0")
+        try:
+            workers = max(0, int(w_raw))
+        except ValueError:
+            workers = 0
+
+    try:
+        jobs = build_jobs(mode, folders)
+    except ValueError as exc:
+        print(f"[new_access] {exc}", flush=True)
+        raise SystemExit(1)
+    if not jobs:
+        print("[new_access] нет задач для выбранного режима", flush=True)
+        raise SystemExit(1)
+
+    print(f"\n[new_access] режим={mode}, задач={len(jobs)}:", flush=True)
+    for name, fl in jobs:
+        print(f"  • {name}: {', '.join(fl)}", flush=True)
+    print(flush=True)
+    return mode, folders, no_staging, no_parallel, workers
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="PF BP-PY-ZY — логика Access, отчёт парами")
-    parser.add_argument("--mode", choices=["pairs"], default="pairs")
+    parser = argparse.ArgumentParser(description="PF BP-PY-ZY — логика Access")
+    parser.add_argument(
+        "--mode",
+        choices=["pairs", "single", "custom_single", "custom_group"],
+        default=None,
+        help="Режим (без --no-menu откроется консольное меню)",
+    )
+    parser.add_argument(
+        "--folders",
+        default="",
+        help="SOrg через запятую (фильтр пар или список для custom_*)",
+    )
+    parser.add_argument(
+        "--no-menu",
+        action="store_true",
+        help="Не показывать меню; использовать --mode и флаги",
+    )
     parser.add_argument(
         "--workers",
         type=int,
@@ -700,11 +905,6 @@ def main() -> int:
         help="Не использовать DuckDB: читать xlsx напрямую (как раньше)",
     )
     args = parser.parse_args()
-
-    if args.no_parallel:
-        os.environ["REPORTS_PARALLEL"] = "0"
-    elif args.workers > 0:
-        os.environ["REPORTS_WORKERS"] = str(args.workers)
 
     paths = load_runtime_paths_dict()
     script_root = Path(__file__).resolve().parent
@@ -724,26 +924,58 @@ def main() -> int:
         print(f"[new_access] Нет каталога: {BASE_DIR}", flush=True)
         return 1
 
+    use_menu = not args.no_menu and args.mode is None and sys.stdin.isatty()
+    if use_menu:
+        mode, folders_csv, no_staging, no_parallel, workers = _interactive_menu()
+    else:
+        mode = args.mode or "pairs"
+        folders_csv = args.folders
+        no_staging = args.no_staging
+        no_parallel = args.no_parallel
+        workers = args.workers
+
+    if no_parallel:
+        os.environ["REPORTS_PARALLEL"] = "0"
+    elif workers > 0:
+        os.environ["REPORTS_WORKERS"] = str(workers)
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     exc_df = collect_and_persist_global_exception(BASE_DIR, OUTPUT_DIR)
 
-    jobs = [(name, cfg["folders"]) for name, cfg in PAIRS.items()]
+    try:
+        jobs = build_jobs(mode, folders_csv)
+    except ValueError as exc:
+        print(f"[new_access] {exc}", flush=True)
+        return 1
+    if not jobs:
+        print("[new_access] нет задач для выбранного режима", flush=True)
+        return 1
+
     all_sorgs = sorted({so for _, folders in jobs for so in folders})
     par = "вкл" if parallel_enabled() else "выкл"
     w = worker_count(2, default_cap=2)
-    staging_mode = "DuckDB" if not args.no_staging else "xlsx"
+    staging_mode = "DuckDB" if not no_staging else "xlsx"
     print(
-        f"[new_access] пары: {', '.join(j[0] for j in jobs)} | "
+        f"[new_access] режим={mode} | задач={len(jobs)} | "
         f"источник={staging_mode} | parallel={par} workers≈{w}",
         flush=True,
     )
+    for job_name, job_folders in jobs:
+        print(f"  • {job_name}: {', '.join(job_folders)}", flush=True)
 
     exit_code = 0
     try:
-        if not args.no_staging:
+        if not no_staging:
             os.environ["REPORTS_PARALLEL"] = "0"
             start_staging(all_sorgs)
         pair_errors = asyncio.run(_run_all_pairs(jobs, exc_df))
+        date_str = datetime.now().strftime("%d.%m.%Y")
+        print(f"[new_access] итоговые файлы в {OUTPUT_DIR}:", flush=True)
+        for job_name, job_folders in jobs:
+            pair_file = OUTPUT_DIR / job_name / f"Check PF BP-PY-ZY {job_name} {date_str}.xlsx"
+            mark = "OK" if pair_file.is_file() else "НЕТ ФАЙЛА"
+            sorg_note = f" ({len(job_folders)} SOrg)" if len(job_folders) > 1 else ""
+            print(f"  [{mark}] {pair_file.name}{sorg_note}", flush=True)
         if pair_errors:
             exit_code = 1
             print(f"[new_access] готово с ошибками в {pair_errors} парах", flush=True)
