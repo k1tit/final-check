@@ -55,16 +55,16 @@ data/
 
 ---
 
-## Основные скрипты
+## Файлы проекта
 
 | Файл | Назначение |
 |------|------------|
-| **`new_access_pf_checks.py`** | Основной CLI: логика **1:1 с Access**, отчёт **парами**. Рекомендуется для сверки с эталоном Access. |
-| **`build_checks.py`** | Общий движок + расширенные режимы (`single`, `custom_group`) и веб-интерфейс. |
-| **`run_checks_web.py`** | Веб-UI (Flask) для запуска проверок из браузера. |
+| **`new_access_pf_checks.py`** | Основной скрипт: логика **1:1 с Access**, отчёт **парами**. |
+| **`build_checks.py`** | Общая библиотека: чтение Excel, пути, оформление листов, исключения. |
 | **`staging_db.py`** | Загрузка xlsx в **DuckDB** на время прогона. |
 | **`parallel_io.py`** | Параллельная обработка SOrg. |
 | **`check_data_files.py`** | Диагностика: какие xlsx читаются, где `BadZipFile`. |
+| **`run_checks.cmd`** | Быстрый запуск на Windows. |
 
 ---
 
@@ -74,13 +74,6 @@ data/
 git clone https://github.com/k1tit/final-check.git
 cd final-check
 python -m pip install -r requirements.txt
-```
-
-Для веб-интерфейса дополнительно:
-
-```powershell
-pip install flask waitress
-# или: install_web_deps.cmd
 ```
 
 **Windows:** для проблемных xlsx (часто 3804 BP) нужны **Microsoft Excel** и **pywin32** — чтение через COM, если pandas не открывает файл.
@@ -117,10 +110,14 @@ pip install flask waitress
 
 ## Запуск
 
-### CLI (Access-логика, пары)
-
 ```powershell
 python new_access_pf_checks.py
+```
+
+или:
+
+```powershell
+run_checks.cmd
 ```
 
 Флаги:
@@ -131,34 +128,11 @@ python new_access_pf_checks.py
 | `--no-parallel` | Последовательная обработка |
 | `--workers N` | Число параллельных SOrg в паре |
 
-### CLI (build_checks)
-
-```powershell
-python build_checks.py --mode pairs
-python build_checks.py --mode single
-python build_checks.py --mode custom_group --folders 3801,3803
-```
-
-### Веб-интерфейс
-
-```powershell
-python run_checks_web.py
-# или: run_checks_web.cmd / Запуск_отчётов_веб.vbs
-```
-
-Откроется `http://127.0.0.1:8765/` — выбор режима, папки data, запуск с прогрессом.
-
-### Служба Windows (опционально)
-
-```powershell
-install_windows_service.cmd
-```
-
 ---
 
 ## Как устроен прогон (DuckDB staging)
 
-По умолчанию (`new_access_pf_checks.py` и `build_checks.py`):
+По умолчанию:
 
 1. **Старт** — все нужные SOrg (3801…3806) читаются из xlsx и заливаются во временную БД `data/staging.duckdb` (таблицы `so_3804_base`, `so_3804_bp`, …).
 2. **Проверки** — данные берутся из DuckDB (xlsx повторно не читаются).
@@ -184,11 +158,6 @@ data/result/3802_3804/
 - `3802 Несоответствия`, `3804 Несоответствия`
 - `3802 Привязка Bill-to по ИНН`, `3804 Привязка Bill-to по ИНН`
 - `Exception`
-
-Дополнительно `build_checks.py` может сохранять:
-
-- `{пара}_ErrorsOnly.xlsx`
-- `{пара}_BillToByINN.xlsx`
 
 ### Оформление листов Excel
 
@@ -219,7 +188,7 @@ python check_data_files.py
 
 ## Стек
 
-Python, pandas, numpy, openpyxl, xlrd, duckdb, pywin32 (Windows), Flask, Waitress, asyncio, Git.
+Python, pandas, numpy, openpyxl, xlrd, duckdb, pywin32 (Windows).
 
 ---
 
